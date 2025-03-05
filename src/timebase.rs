@@ -26,7 +26,7 @@ pub struct Input {
 
 #[derive(Debug, Copy, Clone)]
 pub struct Event {
-    when: i32,
+    when: Option<i32>,
 }
 
 impl Frame {
@@ -44,7 +44,7 @@ impl Frame {
     }
 
     pub fn trigger(&self, inp: &mut Input) {
-        inp.ev.when = self.now;
+        inp.ev.when = Some(self.now);
     }
 }
 
@@ -66,9 +66,22 @@ impl From<Input> for Event {
     }
 }
 
+fn maybe_max(a: Option<i32>, b: Option<i32>) -> Option<i32> {
+    let res = match a {
+        None => b,
+        Some(av) => b.map(|bv| std::cmp::max(av,bv))
+    };
+
+    println!("maybe_max({:?},{:?})->{:?}", a, b, res);
+    res
+}
+
 impl Event {
     pub fn zero() -> Self {
-        Self { when: 0 }
+        Self { when: Some(0) }
+    }
+    pub fn never() -> Self {
+        Self { when: None }
     }
 }
 
@@ -76,14 +89,14 @@ impl std::ops::BitOr<Self> for Event {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         Self {
-            when: std::cmp::max(self.when, rhs.when),
+            when: maybe_max(self.when, rhs.when)
         }
     }
 }
 
 impl std::ops::BitOrAssign for Event {
     fn bitor_assign(&mut self, rhs: Self) {
-        self.when = std::cmp::max(self.when, rhs.when);
+        self.when = maybe_max(self.when, rhs.when)
     }
 }
 
@@ -121,7 +134,7 @@ impl Timebase {
     }
     
     pub fn fountain<const N: usize>(&self, seed: usize, excite: usize) -> [Event; N] {
-        let mut n = [Event::zero(); N];
+        let mut n = [Event::never(); N];
 
         let mut rng = fastrand::Rng::with_seed(seed as u64);
         for i in 0..N * excite {
@@ -131,10 +144,7 @@ impl Timebase {
             let bin = i / excite;
 
             let ev = self.at(r);
-            if ev.when < self.now {
-                /* This event has happened - OR it */
-                n[bin] |= ev;
-            }
+            n[bin] |= ev;
         }
 
         n
@@ -156,33 +166,40 @@ impl Timebase {
         self.at(0f32)
     }
 
-    fn time_since_trigger(&self) -> i32 {
-        self.now - self.trigger.when
+    /**
+     * A trigger in the past
+     */
+    fn trigger_happened(&self) -> Option<i32> {
+        self.trigger.when.filter(|epoch| self.now >= *epoch)
     }
 
     pub fn at(&self, target: f32) -> Event {
-        match self.mode {
-            TimebaseMode::OneShot => Event {
-                when: self.trigger.when + (self.period as f32 * target) as i32,
-            },
-            TimebaseMode::Repeat => {
-                let t = self.time_since_trigger();
+        match self.trigger_happened() {
+            None => Event::never(),
+            Some(epoch) => 
+            match self.mode {
+                TimebaseMode::OneShot => Event {
+                    when: Some(epoch + (self.period as f32 * target) as i32).filter(|e| *e <= self.now),
+                },
+                TimebaseMode::Repeat => {
+                    let t = self.now - epoch;
 
-                let time_in_cycle = t % self.period;
+                    let time_in_cycle = t % self.period;
 
-                let cycle_start_time = t - time_in_cycle;
+                    let cycle_start_time = t - time_in_cycle;
 
-                let target_time_in_cycle = (self.period as f32 * target) as i32;
+                    let target_time_in_cycle = (self.period as f32 * target) as i32;
 
-                if time_in_cycle >= target_time_in_cycle {
-                    /* Trigger is in this cycle */
-                    Event {
-                        when: self.trigger.when + cycle_start_time + target_time_in_cycle,
-                    }
-                } else {
-                    /* Trigger is in last cycle */
-                    Event {
-                        when: self.trigger.when + cycle_start_time - self.period + target_time_in_cycle,
+                    if time_in_cycle >= target_time_in_cycle {
+                        /* Trigger is in this cycle */
+                        Event {
+                            when: Some(epoch + cycle_start_time + target_time_in_cycle),
+                        }
+                    } else {
+                        /* Trigger is in last cycle */
+                        Event {
+                            when: Some(epoch + cycle_start_time - self.period + target_time_in_cycle),
+                        }
                     }
                 }
             }
@@ -194,26 +211,30 @@ impl Timebase {
             now: self.now,
             mode: self.mode,
             period: self.period,
-            trigger: Event{when:self.trigger.when + shift},
+            trigger: Event{when:self.trigger.when.map(|epoch| epoch + shift)},
         }
     }
 
     pub fn get(&self) -> f32 {
-        let t = self.time_since_trigger();
-
-        match self.mode {
-            TimebaseMode::OneShot => {
-                if t < 0 {
-                    0f32
-                } else if t >= self.period {
-                    1f32
-                } else {
-                    t as f32 / self.period as f32
+        match self.trigger_happened() {
+            None => 0f32,
+            Some(epoch) => {
+                let t = self.now - epoch;
+                match self.mode {
+                    TimebaseMode::OneShot => {
+                        if t < 0 {
+                            0f32
+                        } else if t >= self.period {
+                            1f32
+                        } else {
+                            t as f32 / self.period as f32
+                        }
+                    }
+                    TimebaseMode::Repeat => {
+                        let m = t % self.period;
+                        m as f32 / self.period as f32
+                    }
                 }
-            }
-            TimebaseMode::Repeat => {
-                let m = t % self.period;
-                m as f32 / self.period as f32
             }
         }
     }

@@ -1,6 +1,7 @@
 use std::time;
 
 use eframe::egui;
+use timebase::Event;
 
 mod timebase;
 
@@ -26,6 +27,13 @@ impl eframe::App for DemoApp {
                 f.trigger(&mut self.button);
             }
 
+            let tone = f.timebase(timebase::TimebaseMode::Repeat, 200, Event::zero()).sin();
+
+            let ramp = f.timebase(timebase::TimebaseMode::OneShot, 2000, self.button.into()).scale(100.0, 0.0);
+
+            let mut toneval = tone * ramp;
+            ui.add(egui::Slider::new(&mut toneval, 0f32..=100f32));
+
             let twosec = f.timebase(timebase::TimebaseMode::OneShot, 2000, self.button.into());
 
             let evs = twosec.fountain::<10>(0, 8);
@@ -41,7 +49,7 @@ impl eframe::App for DemoApp {
                 let pew = f.timebase(timebase::TimebaseMode::OneShot, 400, twosec.sync());
                 let mut val = pew.shift(dist).sin() * 100f32;
                 ui.add(egui::Slider::new(&mut val, 0f32..=100f32));
-                dist = dist + 100;
+                dist += 100;
             }
 
 
@@ -50,7 +58,7 @@ impl eframe::App for DemoApp {
                 ui.add(egui::Slider::new(&mut val, 0f32..=100f32));
             }
 
-            let mut w = twosec.wave([10.0,20.0,30.0]);
+            let mut w = twosec.wave([10.0, 20.0, 30.0, 80.0]);
             ui.add(egui::Slider::new(&mut w, 0f32..=100f32));
 
         });
